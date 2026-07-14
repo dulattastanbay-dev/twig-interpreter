@@ -143,7 +143,234 @@ class Lexer {
   }
 }
 
-var Twig = { TwigError, Lexer };
+class Parser {
+  constructor(tokens) {
+    this.tokens = tokens;
+    this.pos = 0;
+  }
+
+  peek(offset = 0) { return this.tokens[this.pos + offset]; }
+  current() { return this.peek(); }
+  check(type) { return this.current().type === type; }
+  advance() { return this.tokens[this.pos++]; }
+
+  match(...types) {
+    if (types.includes(this.current().type)) return this.advance();
+    return null;
+  }
+
+  expect(type, message) {
+    if (this.check(type)) return this.advance();
+    const tok = this.current();
+    throw new TwigError(message ?? `Expected ${type} but found ${tok.type}`, tok.line, tok.col, 'parse');
+  }
+
+  parseProgram() {
+    const body = [];
+    while (!this.check('EOF')) body.push(this.parseStatement());
+    return { type: 'Program', body };
+  }
+
+  parseStatement() {
+    switch (this.current().type) {
+      case 'LET': return this.parseLet();
+      case 'IF': return this.parseIf();
+      case 'WHILE': return this.parseWhile();
+      case 'FUNCTION': return this.parseFunctionDecl();
+      case 'RETURN': return this.parseReturn();
+      case 'PRINT': return this.parsePrint();
+      case 'LBRACE': return this.parseBlock();
+      case 'IDENT':
+        if (this.peek(1).type === 'ASSIGN') return this.parseAssign();
+        return this.parseExprStatement();
+      default:
+        return this.parseExprStatement();
+    }
+  }
+
+  parseLet() {
+    const startTok = this.expect('LET');
+    const name = this.expect('IDENT', 'Expected variable name after "let"').value;
+    this.expect('ASSIGN', 'Expected "=" after variable name');
+    const value = this.parseExpression();
+    this.expect('SEMI', 'Expected ";" after variable declaration');
+    return { type: 'LetStmt', name, value, line: startTok.line, col: startTok.col };
+  }
+
+  parseAssign() {
+    const nameTok = this.expect('IDENT');
+    this.expect('ASSIGN');
+    const value = this.parseExpression();
+    this.expect('SEMI', 'Expected ";" after assignment');
+    return { type: 'AssignStmt', name: nameTok.value, value, line: nameTok.line, col: nameTok.col };
+  }
+
+  parseIf() {
+    const startTok = this.expect('IF');
+    this.expect('LPAREN', 'Expected "(" after "if"');
+    const test = this.parseExpression();
+    this.expect('RPAREN', 'Expected ")" after if condition');
+    const consequent = this.parseBlock();
+    const alternate = this.match('ELSE') ? this.parseBlock() : null;
+    return { type: 'IfStmt', test, consequent, alternate, line: startTok.line, col: startTok.col };
+  }
+
+  parseWhile() {
+    const startTok = this.expect('WHILE');
+    this.expect('LPAREN', 'Expected "(" after "while"');
+    const test = this.parseExpression();
+    this.expect('RPAREN', 'Expected ")" after while condition');
+    const body = this.parseBlock();
+    return { type: 'WhileStmt', test, body, line: startTok.line, col: startTok.col };
+  }
+
+  parseFunctionDecl() {
+    const startTok = this.expect('FUNCTION');
+    const name = this.expect('IDENT', 'Expected function name').value;
+    this.expect('LPAREN', 'Expected "(" after function name');
+    const params = [];
+    if (!this.check('RPAREN')) {
+      params.push(this.expect('IDENT', 'Expected parameter name').value);
+      while (this.match('COMMA')) params.push(this.expect('IDENT', 'Expected parameter name').value);
+    }
+    this.expect('RPAREN', 'Expected ")" after parameters');
+    const body = this.parseBlock();
+    return { type: 'FunctionDecl', name, params, body, line: startTok.line, col: startTok.col };
+  }
+
+  parseReturn() {
+    const startTok = this.expect('RETURN');
+    const value = this.check('SEMI') ? null : this.parseExpression();
+    this.expect('SEMI', 'Expected ";" after return statement');
+    return { type: 'ReturnStmt', value, line: startTok.line, col: startTok.col };
+  }
+
+  parsePrint() {
+    const startTok = this.expect('PRINT');
+    this.expect('LPAREN', 'Expected "(" after "print"');
+    const value = this.parseExpression();
+    this.expect('RPAREN', 'Expected ")" after print argument');
+    this.expect('SEMI', 'Expected ";" after print statement');
+    return { type: 'PrintStmt', value, line: startTok.line, col: startTok.col };
+  }
+
+  parseBlock() {
+    const startTok = this.expect('LBRACE', 'Expected "{"');
+    const body = [];
+    while (!this.check('RBRACE')) {
+      if (this.check('EOF')) {
+        throw new TwigError('Unterminated block: expected "}"', startTok.line, startTok.col, 'parse');
+      }
+      body.push(this.parseStatement());
+    }
+    this.expect('RBRACE');
+    return { type: 'Block', body, line: startTok.line, col: startTok.col };
+  }
+
+  parseExprStatement() {
+    const tok = this.current();
+    const expr = this.parseExpression();
+    this.expect('SEMI', 'Expected ";" after expression statement');
+    return { type: 'ExprStmt', expr, line: tok.line, col: tok.col };
+  }
+
+  parseExpression() { return this.parseLogicOr(); }
+
+  parseLogicOr() {
+    let left = this.parseLogicAnd();
+    while (this.check('OR')) {
+      const op = this.advance();
+      left = { type: 'Logical', op: '||', left, right: this.parseLogicAnd(), line: op.line, col: op.col };
+    }
+    return left;
+  }
+
+  parseLogicAnd() {
+    let left = this.parseEquality();
+    while (this.check('AND')) {
+      const op = this.advance();
+      left = { type: 'Logical', op: '&&', left, right: this.parseEquality(), line: op.line, col: op.col };
+    }
+    return left;
+  }
+
+  parseEquality() {
+    let left = this.parseComparison();
+    while (this.check('EQ') || this.check('NEQ')) {
+      const op = this.advance();
+      left = { type: 'Binary', op: op.value, left, right: this.parseComparison(), line: op.line, col: op.col };
+    }
+    return left;
+  }
+
+  parseComparison() {
+    let left = this.parseTerm();
+    while (['LT', 'LE', 'GT', 'GE'].includes(this.current().type)) {
+      const op = this.advance();
+      left = { type: 'Binary', op: op.value, left, right: this.parseTerm(), line: op.line, col: op.col };
+    }
+    return left;
+  }
+
+  parseTerm() {
+    let left = this.parseFactor();
+    while (this.check('PLUS') || this.check('MINUS')) {
+      const op = this.advance();
+      left = { type: 'Binary', op: op.value, left, right: this.parseFactor(), line: op.line, col: op.col };
+    }
+    return left;
+  }
+
+  parseFactor() {
+    let left = this.parseUnary();
+    while (['STAR', 'SLASH', 'PERCENT'].includes(this.current().type)) {
+      const op = this.advance();
+      left = { type: 'Binary', op: op.value, left, right: this.parseUnary(), line: op.line, col: op.col };
+    }
+    return left;
+  }
+
+  parseUnary() {
+    if (this.check('MINUS') || this.check('NOT')) {
+      const op = this.advance();
+      return { type: 'Unary', op: op.value, argument: this.parseUnary(), line: op.line, col: op.col };
+    }
+    return this.parseCall();
+  }
+
+  parseCall() {
+    let expr = this.parsePrimary();
+    while (this.check('LPAREN')) {
+      const startTok = this.advance();
+      const args = [];
+      if (!this.check('RPAREN')) {
+        args.push(this.parseExpression());
+        while (this.match('COMMA')) args.push(this.parseExpression());
+      }
+      this.expect('RPAREN', 'Expected ")" after arguments');
+      expr = { type: 'Call', callee: expr, args, line: startTok.line, col: startTok.col };
+    }
+    return expr;
+  }
+
+  parsePrimary() {
+    const tok = this.current();
+    if (tok.type === 'NUMBER') { this.advance(); return { type: 'NumberLit', value: tok.value, line: tok.line, col: tok.col }; }
+    if (tok.type === 'STRING') { this.advance(); return { type: 'StringLit', value: tok.value, line: tok.line, col: tok.col }; }
+    if (tok.type === 'TRUE') { this.advance(); return { type: 'BoolLit', value: true, line: tok.line, col: tok.col }; }
+    if (tok.type === 'FALSE') { this.advance(); return { type: 'BoolLit', value: false, line: tok.line, col: tok.col }; }
+    if (tok.type === 'IDENT') { this.advance(); return { type: 'Identifier', name: tok.value, line: tok.line, col: tok.col }; }
+    if (tok.type === 'LPAREN') {
+      this.advance();
+      const expr = this.parseExpression();
+      this.expect('RPAREN', 'Expected ")" after expression');
+      return expr;
+    }
+    throw new TwigError(`Unexpected token '${tok.value ?? tok.type}'`, tok.line, tok.col, 'parse');
+  }
+}
+
+var Twig = { TwigError, Lexer, Parser };
 </script>
 </body>
 </html>
