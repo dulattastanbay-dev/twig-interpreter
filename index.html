@@ -3,6 +3,103 @@
 <head>
 <meta charset="UTF-8">
 <title>Twig Playground</title>
+<style>
+  :root {
+    --bg: #1e1e2e;
+    --panel: #262638;
+    --border: #3a3a52;
+    --text: #e4e4f0;
+    --muted: #9090a8;
+    --accent: #7aa2f7;
+    --error-bg: #4a1d24;
+    --error-border: #e06c75;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  .layout {
+    display: flex;
+    height: 100vh;
+    gap: 1px;
+    background: var(--border);
+  }
+  .pane {
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+  }
+  .pane-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  select, button {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button.run { background: var(--accent); color: #10101a; font-weight: 600; border: none; }
+  #editor {
+    flex: 1;
+    background: var(--bg);
+    color: var(--text);
+    border: none;
+    outline: none;
+    resize: none;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 12px;
+  }
+  .tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+  }
+  .tab {
+    padding: 10px 16px;
+    cursor: pointer;
+    color: var(--muted);
+    border-bottom: 2px solid transparent;
+    font-size: 13px;
+  }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab-content {
+    flex: 1;
+    overflow: auto;
+    padding: 12px;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 13px;
+    white-space: pre-wrap;
+    display: none;
+  }
+  .tab-content.active { display: block; }
+  .error-banner {
+    display: none;
+    background: var(--error-bg);
+    border-bottom: 1px solid var(--error-border);
+    color: #ffb3ba;
+    padding: 10px 12px;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 13px;
+  }
+  .error-banner.active { display: block; }
+  .token { color: var(--accent); }
+  .tree-indent { color: var(--muted); }
+  .trace-line { white-space: pre; }
+</style>
 </head>
 <body>
 <script id="twig-core">
@@ -619,6 +716,199 @@ class Evaluator {
 }
 
 var Twig = { TwigError, Lexer, Parser, Environment, TwigFunction, Evaluator };
+</script>
+<div class="layout">
+  <div class="pane">
+    <div class="pane-header">
+      <select id="example-select"></select>
+      <button class="run" id="run-btn">Run ▶</button>
+    </div>
+    <textarea id="editor" spellcheck="false"></textarea>
+  </div>
+  <div class="pane">
+    <div class="error-banner" id="error-banner"></div>
+    <div class="tabs">
+      <div class="tab active" data-tab="tokens">Tokens</div>
+      <div class="tab" data-tab="tree">Parse Tree</div>
+      <div class="tab" data-tab="trace">Trace</div>
+      <div class="tab" data-tab="output">Output</div>
+    </div>
+    <div class="tab-content active" id="tab-tokens"></div>
+    <div class="tab-content" id="tab-tree"></div>
+    <div class="tab-content" id="tab-trace"></div>
+    <div class="tab-content" id="tab-output"></div>
+  </div>
+</div>
+<script>
+  const EXAMPLES = {
+    'Fibonacci': `function fib(n) {
+  if (n <= 1) { return n; }
+  return fib(n - 1) + fib(n - 2);
+}
+
+print(fib(10));`,
+    'Factorial': `function factorial(n) {
+  if (n <= 1) { return 1; }
+  return n * factorial(n - 1);
+}
+
+print(factorial(6));`,
+    'FizzBuzz': `let i = 1;
+while (i <= 15) {
+  if (i % 15 == 0) { print("FizzBuzz"); }
+  else {
+    if (i % 3 == 0) { print("Fizz"); }
+    else {
+      if (i % 5 == 0) { print("Buzz"); }
+      else { print(i); }
+    }
+  }
+  i = i + 1;
+}`,
+    'Closures': `function makeCounter() {
+  let count = 0;
+  function increment() {
+    count = count + 1;
+    return count;
+  }
+  return increment;
+}
+
+let counter = makeCounter();
+print(counter());
+print(counter());
+print(counter());`,
+  };
+
+  const editor = document.getElementById('editor');
+  const exampleSelect = document.getElementById('example-select');
+  const runBtn = document.getElementById('run-btn');
+  const errorBanner = document.getElementById('error-banner');
+  const tabTokens = document.getElementById('tab-tokens');
+  const tabTree = document.getElementById('tab-tree');
+  const tabTrace = document.getElementById('tab-trace');
+  const tabOutput = document.getElementById('tab-output');
+
+  for (const name of Object.keys(EXAMPLES)) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    exampleSelect.appendChild(opt);
+  }
+  exampleSelect.addEventListener('change', () => {
+    editor.value = EXAMPLES[exampleSelect.value];
+  });
+  exampleSelect.value = 'Fibonacci';
+  editor.value = EXAMPLES.Fibonacci;
+
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach((c) => c.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+    });
+  });
+
+  function renderTokens(tokens) {
+    tabTokens.innerHTML = tokens
+      .map((t) => `<span class="token">${t.type}</span> ${JSON.stringify(t.value)} <span class="tree-indent">(${t.line}:${t.col})</span>`)
+      .join('\n');
+  }
+
+  function renderNode(node, depth) {
+    const indent = '  '.repeat(depth);
+    if (!node || typeof node !== 'object') return '';
+    let out = `${indent}${node.type}\n`;
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'type' || key === 'line' || key === 'col') continue;
+      if (Array.isArray(value)) {
+        for (const item of value) out += renderNode(item, depth + 1);
+      } else if (value && typeof value === 'object') {
+        out += renderNode(value, depth + 1);
+      } else if (value !== undefined) {
+        out += `${indent}  ${key}: ${JSON.stringify(value)}\n`;
+      }
+    }
+    return out;
+  }
+
+  function renderTree(program) {
+    tabTree.textContent = renderNode(program, 0);
+  }
+
+  function renderTrace(events) {
+    tabTrace.innerHTML = events
+      .map((e) => {
+        const indent = '  '.repeat(Math.max(e.depth - 1, 0));
+        const line = e.kind === 'call'
+          ? `${indent}call ${e.name}(${e.args.map((a) => JSON.stringify(a)).join(', ')})`
+          : `${indent}return ${e.name} = ${JSON.stringify(e.value)}`;
+        return `<div class="trace-line">${line}</div>`;
+      })
+      .join('');
+  }
+
+  function renderOutput(lines) {
+    tabOutput.textContent = lines.join('\n');
+  }
+
+  function showError(err) {
+    errorBanner.textContent = `[${err.phase}] ${err.message} (line ${err.line}, col ${err.col})`;
+    errorBanner.classList.add('active');
+  }
+
+  function clearError() {
+    errorBanner.classList.remove('active');
+    errorBanner.textContent = '';
+  }
+
+  function run() {
+    clearError();
+    tabTokens.textContent = '';
+    tabTree.textContent = '';
+    tabTrace.innerHTML = '';
+    tabOutput.textContent = '';
+
+    const source = editor.value;
+    let tokens;
+    try {
+      tokens = new Twig.Lexer(source).tokenize();
+      renderTokens(tokens);
+    } catch (err) {
+      renderTokens([]);
+      showError(err);
+      return;
+    }
+
+    let ast;
+    try {
+      ast = new Twig.Parser(tokens).parseProgram();
+      renderTree(ast);
+    } catch (err) {
+      showError(err);
+      return;
+    }
+
+    const trace = [];
+    const prints = [];
+    const evaluator = new Twig.Evaluator({
+      onTrace: (e) => trace.push(e),
+      onPrint: (text) => prints.push(text),
+    });
+    try {
+      evaluator.run(ast);
+      renderTrace(trace);
+      renderOutput(prints);
+    } catch (err) {
+      renderTrace(trace);
+      renderOutput(prints);
+      showError(err);
+    }
+  }
+
+  runBtn.addEventListener('click', run);
+  run();
 </script>
 </body>
 </html>
