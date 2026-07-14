@@ -25,6 +25,9 @@ live as code runs.
 `if (5) { }` is a runtime type error, not silently coerced — a deliberate
 choice to avoid JS-style truthiness footguns.
 
+**Design note:** re-declaring a variable with `let` in the same scope is
+allowed and simply rebinds it — this is intentional, not an oversight.
+
 ## Architecture
 
 ```

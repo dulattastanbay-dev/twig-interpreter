@@ -810,9 +810,13 @@ print(counter());`,
     });
   });
 
+  function escapeHtml(s) {
+    return s.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));
+  }
+
   function renderTokens(tokens) {
     tabTokens.innerHTML = tokens
-      .map((t) => `<span class="token">${t.type}</span> ${JSON.stringify(t.value)} <span class="tree-indent">(${t.line}:${t.col})</span>`)
+      .map((t) => `<span class="token">${escapeHtml(t.type)}</span> ${escapeHtml(JSON.stringify(t.value))} <span class="tree-indent">(${t.line}:${t.col})</span>`)
       .join('\n');
   }
 
@@ -844,7 +848,7 @@ print(counter());`,
         const line = e.kind === 'call'
           ? `${indent}call ${e.name}(${e.args.map((a) => JSON.stringify(a)).join(', ')})`
           : `${indent}return ${e.name} = ${JSON.stringify(e.value)}`;
-        return `<div class="trace-line">${line}</div>`;
+        return `<div class="trace-line">${escapeHtml(line)}</div>`;
       })
       .join('');
   }

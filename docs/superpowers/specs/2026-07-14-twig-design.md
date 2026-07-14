@@ -74,7 +74,7 @@ admissions committee":
 | Case | Behavior |
 |---|---|
 | Division or modulo by zero | Runtime error: `"Division by zero"` — not `Infinity`/`NaN` |
-| Deep recursion | Evaluator tracks call depth explicitly; raises `"Stack overflow: max call depth exceeded"` at a fixed limit (1000) *before* the underlying JS engine throws a native `RangeError` |
+| Deep recursion | Evaluator tracks call depth explicitly; raises `"Stack overflow: max call depth exceeded"` at a fixed limit (200) *before* the underlying JS engine throws a native `RangeError` |
 | Unterminated block/paren/string | Parser (or lexer, for strings) detects EOF while a token was expected and raises a parse error naming what was expected and where |
 | Calling a non-function | Runtime type check before invocation: `"TypeError: <value> is not callable"` |
 | Undefined variable reference | Runtime error: `"Undefined variable: x"` — not silent `undefined` |
