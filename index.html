@@ -370,7 +370,246 @@ class Parser {
   }
 }
 
-var Twig = { TwigError, Lexer, Parser };
+class Environment {
+  constructor(parent = null) {
+    this.vars = new Map();
+    this.parent = parent;
+  }
+
+  define(name, value) {
+    this.vars.set(name, value);
+  }
+
+  get(name) {
+    if (this.vars.has(name)) return this.vars.get(name);
+    if (this.parent) return this.parent.get(name);
+    throw new Error(`Undefined variable: ${name}`);
+  }
+
+  set(name, value) {
+    if (this.vars.has(name)) { this.vars.set(name, value); return; }
+    if (this.parent) { this.parent.set(name, value); return; }
+    throw new Error(`Undefined variable: ${name}`);
+  }
+
+  has(name) {
+    if (this.vars.has(name)) return true;
+    return this.parent ? this.parent.has(name) : false;
+  }
+}
+
+class TwigFunction {
+  constructor(decl, closure) {
+    this.decl = decl;
+    this.closure = closure;
+  }
+}
+
+class ReturnSignal {
+  constructor(value) {
+    this.value = value;
+  }
+}
+
+// Well below any mainstream JS engine's real stack limit, so this always
+// fires before a native RangeError would.
+const MAX_CALL_DEPTH = 200;
+
+class Evaluator {
+  constructor({ onTrace = null, onPrint = null } = {}) {
+    this.onTrace = onTrace;
+    this.onPrint = onPrint;
+    this.callDepth = 0;
+    this.global = new Environment();
+  }
+
+  trace(event) {
+    if (this.onTrace) this.onTrace({ ...event, depth: this.callDepth });
+  }
+
+  run(program) {
+    this.execBlockBody(program.body, this.global);
+  }
+
+  execBlockBody(statements, env) {
+    for (const stmt of statements) this.execStatement(stmt, env);
+  }
+
+  execStatement(node, env) {
+    switch (node.type) {
+      case 'LetStmt':
+        env.define(node.name, this.evalExpr(node.value, env));
+        return;
+      case 'AssignStmt': {
+        const value = this.evalExpr(node.value, env);
+        try {
+          env.set(node.name, value);
+        } catch {
+          throw new TwigError(`Undefined variable: ${node.name}`, node.line, node.col, 'runtime');
+        }
+        return;
+      }
+      case 'IfStmt': {
+        const test = this.evalExpr(node.test, env);
+        this.assertBoolean(test, node.test);
+        if (test) this.execStatement(node.consequent, env);
+        else if (node.alternate) this.execStatement(node.alternate, env);
+        return;
+      }
+      case 'WhileStmt':
+        for (;;) {
+          const test = this.evalExpr(node.test, env);
+          this.assertBoolean(test, node.test);
+          if (!test) break;
+          this.execStatement(node.body, env);
+        }
+        return;
+      case 'FunctionDecl':
+        env.define(node.name, new TwigFunction(node, env));
+        return;
+      case 'ReturnStmt':
+        throw new ReturnSignal(node.value ? this.evalExpr(node.value, env) : null);
+      case 'PrintStmt': {
+        const value = this.evalExpr(node.value, env);
+        if (this.onPrint) this.onPrint(this.stringify(value));
+        return;
+      }
+      case 'ExprStmt':
+        this.evalExpr(node.expr, env);
+        return;
+      case 'Block': {
+        const blockEnv = new Environment(env);
+        this.execBlockBody(node.body, blockEnv);
+        return;
+      }
+      default:
+        throw new Error(`Unknown statement type: ${node.type}`);
+    }
+  }
+
+  assertBoolean(value, node) {
+    if (typeof value !== 'boolean') {
+      throw new TwigError(`Expected a boolean condition, got ${this.typeName(value)}`, node.line, node.col, 'runtime');
+    }
+  }
+
+  assertNumbers(left, right, node) {
+    if (typeof left !== 'number' || typeof right !== 'number') {
+      throw new TwigError(`Expected numbers, got ${this.typeName(left)} and ${this.typeName(right)}`, node.line, node.col, 'runtime');
+    }
+  }
+
+  typeName(value) {
+    if (value === null) return 'null';
+    if (value instanceof TwigFunction) return 'function';
+    return typeof value;
+  }
+
+  stringify(value) {
+    if (value === null) return 'null';
+    if (value instanceof TwigFunction) return `<function ${value.decl.name}>`;
+    return String(value);
+  }
+
+  evalExpr(node, env) {
+    switch (node.type) {
+      case 'NumberLit': return node.value;
+      case 'StringLit': return node.value;
+      case 'BoolLit': return node.value;
+      case 'Identifier':
+        try {
+          return env.get(node.name);
+        } catch {
+          throw new TwigError(`Undefined variable: ${node.name}`, node.line, node.col, 'runtime');
+        }
+      case 'Unary': {
+        const value = this.evalExpr(node.argument, env);
+        if (node.op === '-') {
+          if (typeof value !== 'number') throw new TwigError(`Cannot negate ${this.typeName(value)}`, node.line, node.col, 'runtime');
+          return -value;
+        }
+        if (typeof value !== 'boolean') throw new TwigError(`Cannot apply ! to ${this.typeName(value)}`, node.line, node.col, 'runtime');
+        return !value;
+      }
+      case 'Logical': {
+        const left = this.evalExpr(node.left, env);
+        this.assertBoolean(left, node.left);
+        if (node.op === '&&' && !left) return false;
+        if (node.op === '||' && left) return true;
+        const right = this.evalExpr(node.right, env);
+        this.assertBoolean(right, node.right);
+        return right;
+      }
+      case 'Binary': return this.evalBinary(node, env);
+      case 'Call': return this.evalCall(node, env);
+      default:
+        throw new Error(`Unknown expression type: ${node.type}`);
+    }
+  }
+
+  evalBinary(node, env) {
+    const left = this.evalExpr(node.left, env);
+    const right = this.evalExpr(node.right, env);
+    switch (node.op) {
+      case '+':
+        if (typeof left === 'number' && typeof right === 'number') return left + right;
+        if (typeof left === 'string' && typeof right === 'string') return left + right;
+        throw new TwigError(`Cannot apply + to ${this.typeName(left)} and ${this.typeName(right)}`, node.line, node.col, 'runtime');
+      case '-': this.assertNumbers(left, right, node); return left - right;
+      case '*': this.assertNumbers(left, right, node); return left * right;
+      case '/':
+        this.assertNumbers(left, right, node);
+        if (right === 0) throw new TwigError('Division by zero', node.line, node.col, 'runtime');
+        return left / right;
+      case '%':
+        this.assertNumbers(left, right, node);
+        if (right === 0) throw new TwigError('Division by zero', node.line, node.col, 'runtime');
+        return left % right;
+      case '==': return left === right;
+      case '!=': return left !== right;
+      case '<': this.assertNumbers(left, right, node); return left < right;
+      case '<=': this.assertNumbers(left, right, node); return left <= right;
+      case '>': this.assertNumbers(left, right, node); return left > right;
+      case '>=': this.assertNumbers(left, right, node); return left >= right;
+      default:
+        throw new Error(`Unknown binary operator: ${node.op}`);
+    }
+  }
+
+  evalCall(node, env) {
+    const callee = this.evalExpr(node.callee, env);
+    const args = node.args.map((a) => this.evalExpr(a, env));
+    if (!(callee instanceof TwigFunction)) {
+      throw new TwigError(`TypeError: ${this.stringify(callee)} is not callable`, node.line, node.col, 'runtime');
+    }
+    return this.callFunction(callee, args, node);
+  }
+
+  callFunction(fn, args, callNode) {
+    if (this.callDepth >= MAX_CALL_DEPTH) {
+      throw new TwigError('Stack overflow: max call depth exceeded', callNode.line, callNode.col, 'runtime');
+    }
+    const callEnv = new Environment(fn.closure);
+    fn.decl.params.forEach((param, i) => callEnv.define(param, args[i] !== undefined ? args[i] : null));
+    this.callDepth++;
+    this.trace({ kind: 'call', name: fn.decl.name, args });
+    try {
+      this.execBlockBody(fn.decl.body.body, callEnv);
+      this.trace({ kind: 'return', name: fn.decl.name, value: null });
+      return null;
+    } catch (signal) {
+      if (signal instanceof ReturnSignal) {
+        this.trace({ kind: 'return', name: fn.decl.name, value: signal.value });
+        return signal.value;
+      }
+      throw signal;
+    } finally {
+      this.callDepth--;
+    }
+  }
+}
+
+var Twig = { TwigError, Lexer, Parser, Environment, TwigFunction, Evaluator };
 </script>
 </body>
 </html>
