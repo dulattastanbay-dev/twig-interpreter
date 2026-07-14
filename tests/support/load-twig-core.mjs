@@ -12,11 +12,10 @@ export function loadTwigCore() {
   if (!match) {
     throw new Error('Could not find <script id="twig-core"> block in index.html');
   }
-  const sandbox = {};
-  vm.createContext(sandbox);
-  vm.runInContext(match[1], sandbox, { filename: 'twig-core.js' });
-  if (!sandbox.Twig) {
+  const script = new vm.Script(match[1], { filename: 'twig-core.js' });
+  script.runInThisContext();
+  if (!globalThis.Twig) {
     throw new Error('twig-core script did not define a global Twig object');
   }
-  return sandbox.Twig;
+  return globalThis.Twig;
 }
