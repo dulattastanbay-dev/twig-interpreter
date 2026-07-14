@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Twig Playground</title>
+</head>
+<body>
+<script id="twig-core">
+class TwigError extends Error {
+  constructor(message, line, col, phase) {
+    super(message);
+    this.name = 'TwigError';
+    this.line = line;
+    this.col = col;
+    this.phase = phase;
+  }
+}
+
+const KEYWORDS = new Set(['let', 'if', 'else', 'while', 'function', 'return', 'print', 'true', 'false']);
+
+const TWO_CHAR_OPS = { '==': 'EQ', '!=': 'NEQ', '<=': 'LE', '>=': 'GE', '&&': 'AND', '||': 'OR' };
+const ONE_CHAR_OPS = {
+  '+': 'PLUS', '-': 'MINUS', '*': 'STAR', '/': 'SLASH', '%': 'PERCENT',
+  '=': 'ASSIGN', '<': 'LT', '>': 'GT', '!': 'NOT',
+  '(': 'LPAREN', ')': 'RPAREN', '{': 'LBRACE', '}': 'RBRACE',
+  ',': 'COMMA', ';': 'SEMI',
+};
+const ESCAPES = { n: '\n', t: '\t', '"': '"', '\\': '\\' };
+
+class Lexer {
+  constructor(source) {
+    this.source = source;
+    this.pos = 0;
+    this.line = 1;
+    this.col = 1;
+    this.tokens = [];
+  }
+
+  peek(offset = 0) {
+    return this.source[this.pos + offset];
+  }
+
+  advance() {
+    const ch = this.source[this.pos++];
+    if (ch === '\n') { this.line++; this.col = 1; } else { this.col++; }
+    return ch;
+  }
+
+  addToken(type, value, line, col) {
+    this.tokens.push({ type, value, line, col });
+  }
+
+  tokenize() {
+    while (this.pos < this.source.length) {
+      this.skipWhitespaceAndComments();
+      if (this.pos >= this.source.length) break;
+      const startLine = this.line;
+      const startCol = this.col;
+      const ch = this.peek();
+      if (this.isDigit(ch)) {
+        this.readNumber(startLine, startCol);
+      } else if (ch === '"') {
+        this.readString(startLine, startCol);
+      } else if (this.isIdentStart(ch)) {
+        this.readIdentifier(startLine, startCol);
+      } else {
+        this.readOperator(startLine, startCol);
+      }
+    }
+    this.tokens.push({ type: 'EOF', value: null, line: this.line, col: this.col });
+    return this.tokens;
+  }
+
+  skipWhitespaceAndComments() {
+    for (;;) {
+      const ch = this.peek();
+      if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n') {
+        this.advance();
+      } else if (ch === '/' && this.peek(1) === '/') {
+        while (this.pos < this.source.length && this.peek() !== '\n') this.advance();
+      } else {
+        break;
+      }
+    }
+  }
+
+  isDigit(ch) { return ch >= '0' && ch <= '9'; }
+  isIdentStart(ch) { return ch !== undefined && /[A-Za-z_]/.test(ch); }
+  isIdentPart(ch) { return ch !== undefined && /[A-Za-z0-9_]/.test(ch); }
+
+  readNumber(line, col) {
+    let text = '';
+    while (this.pos < this.source.length && this.isDigit(this.peek())) text += this.advance();
+    if (this.peek() === '.' && this.isDigit(this.peek(1))) {
+      text += this.advance();
+      while (this.pos < this.source.length && this.isDigit(this.peek())) text += this.advance();
+    }
+    this.addToken('NUMBER', Number(text), line, col);
+  }
+
+  readString(line, col) {
+    this.advance();
+    let text = '';
+    for (;;) {
+      if (this.pos >= this.source.length || this.peek() === '\n') {
+        throw new TwigError('Unterminated string literal', line, col, 'lex');
+      }
+      const ch = this.peek();
+      if (ch === '"') { this.advance(); break; }
+      if (ch === '\\') {
+        this.advance();
+        const esc = this.advance();
+        if (!(esc in ESCAPES)) {
+          throw new TwigError(`Unknown escape sequence \\${esc}`, this.line, this.col, 'lex');
+        }
+        text += ESCAPES[esc];
+      } else {
+        text += this.advance();
+      }
+    }
+    this.addToken('STRING', text, line, col);
+  }
+
+  readIdentifier(line, col) {
+    let text = '';
+    while (this.pos < this.source.length && this.isIdentPart(this.peek())) text += this.advance();
+    this.addToken(KEYWORDS.has(text) ? text.toUpperCase() : 'IDENT', text, line, col);
+  }
+
+  readOperator(line, col) {
+    const two = this.source.slice(this.pos, this.pos + 2);
+    if (TWO_CHAR_OPS[two]) {
+      this.advance(); this.advance();
+      this.addToken(TWO_CHAR_OPS[two], two, line, col);
+      return;
+    }
+    const ch = this.advance();
+    if (ONE_CHAR_OPS[ch]) {
+      this.addToken(ONE_CHAR_OPS[ch], ch, line, col);
+    } else {
+      throw new TwigError(`Unexpected character '${ch}'`, line, col, 'lex');
+    }
+  }
+}
+
+var Twig = { TwigError, Lexer };
+</script>
+</body>
+</html>
