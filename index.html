@@ -406,8 +406,10 @@ class TwigFunction {
 }
 
 class ReturnSignal {
-  constructor(value) {
+  constructor(value, line = 0, col = 0) {
     this.value = value;
+    this.line = line;
+    this.col = col;
   }
 }
 
@@ -428,7 +430,14 @@ class Evaluator {
   }
 
   run(program) {
-    this.execBlockBody(program.body, this.global);
+    try {
+      this.execBlockBody(program.body, this.global);
+    } catch (signal) {
+      if (signal instanceof ReturnSignal) {
+        throw new TwigError('Return statement outside of a function', signal.line, signal.col, 'runtime');
+      }
+      throw signal;
+    }
   }
 
   execBlockBody(statements, env) {
@@ -468,7 +477,7 @@ class Evaluator {
         env.define(node.name, new TwigFunction(node, env));
         return;
       case 'ReturnStmt':
-        throw new ReturnSignal(node.value ? this.evalExpr(node.value, env) : null);
+        throw new ReturnSignal(node.value ? this.evalExpr(node.value, env) : null, node.line, node.col);
       case 'PrintStmt': {
         const value = this.evalExpr(node.value, env);
         if (this.onPrint) this.onPrint(this.stringify(value));

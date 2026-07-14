@@ -132,3 +132,11 @@ test('unconditional recursion raises a clean stack-overflow TwigError, not a nat
     return true;
   });
 });
+
+test('a top-level return outside any function raises a runtime TwigError, not an uncaught object', () => {
+  assert.throws(() => runTwig('return 5;'), (err) => {
+    assert.ok(err instanceof TwigError);
+    assert.equal(err.phase, 'runtime');
+    return true;
+  });
+});
