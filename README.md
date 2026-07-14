@@ -5,7 +5,7 @@ parser, and a tree-walking evaluator, wrapped in a single-file HTML/CSS/JS
 playground (no build step) that shows tokens, parse tree, and execution trace
 live as code runs.
 
-**[Try it live](https://YOUR-USERNAME.github.io/twig-interpreter/)**
+**[Try it live](https://dulattastanbay-dev.github.io/twig-interpreter/)**
 
 ![Twig playground running the Fibonacci example with the Trace tab open](docs/screenshot.png)
 
